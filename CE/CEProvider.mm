@@ -155,7 +155,7 @@
 			
 			CVPixelBufferLockBaseAddress(pixelBuffer, 0);
 			{
-				uint8_t *bufferPtr = CVPixelBufferGetBaseAddress(pixelBuffer);
+				uint8_t *bufferPtr = (uint8_t *)CVPixelBufferGetBaseAddress(pixelBuffer);
 				size_t width = CVPixelBufferGetWidth(pixelBuffer);
 				size_t height = CVPixelBufferGetHeight(pixelBuffer);
 				size_t rowBytes = CVPixelBufferGetBytesPerRow(pixelBuffer);
