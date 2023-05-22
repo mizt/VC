@@ -7,6 +7,8 @@
 #import <CoreMediaIO/CMIOHardware.h>
 #import <IOKit/audio/IOAudioTypes.h>
 
+#import "addMethod.h"
+
 // #define OSC_DEBUG
 #ifdef OSC_DEBUG
     #import "OSC.h"
@@ -33,6 +35,10 @@
 	NSDictionary *_bufferAuxAttributes;
 	uint32_t _whiteStripeStartRow;
 	BOOL _whiteStripeIsAscending;
+    id<AVCaptureVideoDataOutputSampleBufferDelegate> _observer;
+    AVCaptureSession *_session;
+    AVCaptureDeviceInput *_videoDeviceInput;
+    AVCaptureVideoDataOutput *_dataOutput;
 }
 
 +(instancetype)deviceWithLocalizedName:(NSString *)localizedName;
@@ -75,11 +81,127 @@
     
 	self = [super init];
 	if(self) {
+        
+        CMVideoDimensions dims = {.width = 640, .height = 480};
+
+        NSString *name = @"Apple Inc.";                   
+        AVCaptureDeviceDiscoverySession *captureDeviceDiscoverySession = [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeBuiltInWideAngleCamera] mediaType:AVMediaTypeVideo position: AVCaptureDevicePositionUnspecified];
+        NSArray *devices = [captureDeviceDiscoverySession devices];
+                   
+        int select = -1;
+       
+        if(devices) {
+            
+           unsigned long num = [devices count];
+           if(num>0) {
+               for(int k=0; k<num; k++) {
+                   AVCaptureDevice *device = (AVCaptureDevice *)devices[k];
+                   if([device hasMediaType:AVMediaTypeVideo]) {
+                       if([device.manufacturer compare:name]==NSOrderedSame) {
+                           select = k;
+                           break;
+                       }
+                   }
+               }
+           }
+           
+           if(select!=-1) {
+               
+               AVCaptureDevice *device = devices[select];
+               NSArray<AVCaptureDeviceFormat *> *formats = device.formats;
+               
+               for(int k=0; k<[formats count]; k++) {
+                                   
+                   AVCaptureDeviceFormat *format = formats[k];
+                   CMFormatDescriptionRef desc = format.formatDescription;
+                   CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(desc);
+
+                   if(dims.width==dimensions.width&&dims.height==dimensions.height) {
+                       
+                       objc_registerClassPair(objc_allocateClassPair(objc_getClass("NSObject"),"AVCaptureVideoDataOutputSampleBuffer",0));
+                                   Class AVCaptureVideoDataOutputSampleBuffer = objc_getClass("AVCaptureVideoDataOutputSampleBuffer");
+
+                       addMethod(AVCaptureVideoDataOutputSampleBuffer,@"captureOutput:didOutputSampleBuffer:fromConnection:",^(id me,AVCaptureOutput *captureOutput, CMSampleBufferRef sampleBuffer,AVCaptureConnection *connection) {
+                           
+                               
+                           CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+                           CVPixelBufferRef pixelBuffer = NULL;
+                           OSStatus err = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, self.bufferPool,(__bridge CFDictionaryRef)self.bufferAuxAttributes,&pixelBuffer);
+                           
+                           if(!err&&imageBuffer&&pixelBuffer) {
+                               
+                               CVPixelBufferLockBaseAddress(pixelBuffer,0);
+                               CVPixelBufferLockBaseAddress(imageBuffer,0);
+                               {
+                                   unsigned int *pixel = (unsigned int *)CVPixelBufferGetBaseAddress(pixelBuffer);
+                                   size_t width = CVPixelBufferGetWidth(pixelBuffer);
+                                   size_t height = CVPixelBufferGetHeight(pixelBuffer);
+                                                                          
+                                   size_t rowBytes[2] = {
+                                       (CVPixelBufferGetBytesPerRow(imageBuffer))>>2,
+                                       (CVPixelBufferGetBytesPerRow(pixelBuffer))>>2
+                                   };
+                                   
+                                   if(width==CVPixelBufferGetWidth(imageBuffer)&&height==CVPixelBufferGetHeight(imageBuffer)) {
+                                       
+                                       unsigned int *image = (unsigned int *)CVPixelBufferGetBaseAddress(imageBuffer);
+
+                                       for(int i=0; i<height; i++) {
+                                           for(int j=0; j<width; j++) {
+                                               pixel[i*rowBytes[0]+j] = image[i*rowBytes[1]+j];
+                                           }
+                                       }
+                                   }
+                                   else {
+                                       unsigned int color = 0xFF000000|(random()&0xFFFFFF);
+                                       for(int i=0; i<height; i++) {
+                                           for(int j=0; j<width; j++) {
+                                               pixel[i*rowBytes[0]+j] = color;
+                                           }
+                                       }
+                                   }
+                               }
+                               CVPixelBufferUnlockBaseAddress(imageBuffer,0);
+                               CVPixelBufferUnlockBaseAddress(pixelBuffer,0);
+
+                               CMSampleBufferRef sbuf = NULL;
+                               CMSampleTimingInfo timing;
+                               timing.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock());
+                               timing.decodeTimeStamp = kCMTimeInvalid;
+                               
+                               err = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, pixelBuffer, true, NULL, NULL, self.videoDescription, &timing, &sbuf);
+                               CFRelease(pixelBuffer);
+                               if(!err) {
+                                   [self->_streamSource.stream sendSampleBuffer:sbuf discontinuity:CMIOExtensionStreamDiscontinuityFlagTime hostTimeInNanoseconds:0];
+                                   CFRelease(sbuf);
+                               }
+                           }
+                           
+                       },"v@:@@@");
+                                   
+                       _observer = [[AVCaptureVideoDataOutputSampleBuffer alloc] init];
+
+                       _videoDeviceInput = [AVCaptureDeviceInput deviceInputWithDevice:device error:nil];
+
+                       _dataOutput = [[AVCaptureVideoDataOutput alloc] init];
+                       _dataOutput.videoSettings = [NSDictionary dictionaryWithObjectsAndKeys:
+                          [NSNumber numberWithFloat:dims.width],(id)kCVPixelBufferWidthKey,
+                          [NSNumber numberWithFloat:dims.height],(id)kCVPixelBufferHeightKey,
+                          [NSNumber numberWithInt:kCVPixelFormatType_32BGRA],(id)kCVPixelBufferPixelFormatTypeKey,
+                       nil];
+                       
+                       [_dataOutput setSampleBufferDelegate:_observer queue:dispatch_queue_create("org.mizt.vdig",nullptr)];
+                
+                       break;
+                   }
+               }
+           }
+       }
+
 		NSUUID *deviceID = [[NSUUID alloc] init]; // replace this with your device UUID
 		_device = [[CMIOExtensionDevice alloc] initWithLocalizedName:localizedName deviceID:deviceID legacyDeviceID:nil source:self];
         _streamingCounter = 0;
 		_timerQueue = dispatch_queue_create(kLable,0);
-		CMVideoDimensions dims = {.width = 640, .height = 480};
 		(void)CMVideoFormatDescriptionCreate(kCFAllocatorDefault, kCVPixelFormatType_32BGRA, dims.width, dims.height, NULL, &_videoDescription);
 		if (_videoDescription) {
 			NSDictionary *pixelBufferAttributes = @{
@@ -135,67 +257,87 @@
 	if(!_bufferPool) return;
 
 	_streamingCounter++;
-    if(_timer==nil) {
-        
-#ifdef OSC_DEBUG
-        sender->send("/debug","s","start");
-#endif
-        
-        _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,_timerQueue);
-        dispatch_source_set_timer(_timer,DISPATCH_TIME_NOW,(uint64_t)(NSEC_PER_SEC/kFrameRate),0);
-        dispatch_source_set_event_handler(_timer, ^{
-            dispatch_async(dispatch_get_main_queue(),^{
-                     
-                CVPixelBufferRef pixelBuffer = NULL;
-                OSStatus err = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, self.bufferPool, (__bridge CFDictionaryRef)self.bufferAuxAttributes, &pixelBuffer );
+    if(_streamingCounter==1) {
+        if(_observer) {
+            if(_session==nil) {
+                _session = [[AVCaptureSession alloc] init];
+                [_session addInput:_videoDeviceInput];
+                [_session addOutput:_dataOutput];
+                _session.sessionPreset = AVCaptureSessionPreset640x480;
+                [_session startRunning];
+            }
+        }
+        else {
+            if(_timer==nil) {
                 
-                if(!err&&pixelBuffer) {
-                    
-                    CVPixelBufferLockBaseAddress(pixelBuffer, 0);
-                    {
-                        unsigned int *bufferPtr = (unsigned int *)CVPixelBufferGetBaseAddress(pixelBuffer);
-                        size_t width = CVPixelBufferGetWidth(pixelBuffer);
-                        size_t height = CVPixelBufferGetHeight(pixelBuffer);
-                        size_t rowBytes = (CVPixelBufferGetBytesPerRow(pixelBuffer))>>2;
+#ifdef OSC_DEBUG
+                sender->send("/debug","s","start");
+#endif
+                
+                
+                // else {}
+                
+                _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,_timerQueue);
+                dispatch_source_set_timer(_timer,DISPATCH_TIME_NOW,(uint64_t)(NSEC_PER_SEC/kFrameRate),0);
+                dispatch_source_set_event_handler(_timer,^{
+                    dispatch_async(dispatch_get_main_queue(),^{
                         
-                        unsigned int color = 0xFF000000|(random()&0xFFFFFF);
+                        CVPixelBufferRef pixelBuffer = NULL;
+                        OSStatus err = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, self.bufferPool,(__bridge CFDictionaryRef)self.bufferAuxAttributes,&pixelBuffer);
                         
-                        for(int i=0; i<height; i++) {
-                            for(int j=0; j<width; j++) {
-                                bufferPtr[i*rowBytes+j] = color;
+                        if(!err&&pixelBuffer) {
+                            
+                            CVPixelBufferLockBaseAddress(pixelBuffer,0);
+                            {
+                                unsigned int *bufferPtr = (unsigned int *)CVPixelBufferGetBaseAddress(pixelBuffer);
+                                size_t width = CVPixelBufferGetWidth(pixelBuffer);
+                                size_t height = CVPixelBufferGetHeight(pixelBuffer);
+                                size_t rowBytes = (CVPixelBufferGetBytesPerRow(pixelBuffer))>>2;
+                                
+                                unsigned int color = 0xFF000000|(random()&0xFFFFFF);
+                                
+                                for(int i=0; i<height; i++) {
+                                    for(int j=0; j<width; j++) {
+                                        bufferPtr[i*rowBytes+j] = color;
+                                    }
+                                }
+                                
+                            }
+                            CVPixelBufferUnlockBaseAddress(pixelBuffer,0);
+                            
+                            CMSampleBufferRef sbuf = NULL;
+                            CMSampleTimingInfo timing;
+                            timing.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock());
+                            timing.decodeTimeStamp = kCMTimeInvalid;
+                            
+                            err = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, pixelBuffer, true, NULL, NULL, self.videoDescription, &timing, &sbuf);
+                            CFRelease(pixelBuffer);
+                            if(!err) {
+                                [self->_streamSource.stream sendSampleBuffer:sbuf discontinuity:CMIOExtensionStreamDiscontinuityFlagTime hostTimeInNanoseconds:0];
+                                CFRelease(sbuf);
                             }
                         }
-                        
-                    }
-                    CVPixelBufferUnlockBaseAddress(pixelBuffer,0);
-                    
-                    CMSampleBufferRef sbuf = NULL;
-                    CMSampleTimingInfo timing;
-                    timing.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock());
-                    timing.decodeTimeStamp = kCMTimeInvalid;
-                    
-                    err = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, pixelBuffer, true, NULL, NULL, self.videoDescription, &timing, &sbuf);
-                    CFRelease(pixelBuffer);
-                    if(!err) {
-                        [self->_streamSource.stream sendSampleBuffer:sbuf discontinuity:CMIOExtensionStreamDiscontinuityFlagTime hostTimeInNanoseconds:0];
-                        CFRelease(sbuf);
-                    }
-                }
-            });
-        });
-        
-        dispatch_source_set_cancel_handler(_timer,^{});
-        dispatch_resume(_timer);
+                    });
+                });
+                
+                dispatch_source_set_cancel_handler(_timer,^{});
+                dispatch_resume(_timer);
+            }
+        }
     }
 }
 
 -(void)stopStreaming {
     _streamingCounter--;
 	if(_streamingCounter==0) {
-            
 #ifdef OSC_DEBUG
         sender->send("/debug","s","stop");
 #endif
+        if(_session!=nil) {
+            [_session stopRunning];
+            _session = nil;
+        }
+        
         if(_timer) {
             dispatch_source_cancel(_timer);
             _timer = nil;
