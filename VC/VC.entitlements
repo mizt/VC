@@ -10,5 +10,7 @@
 	<array>
 		<string>$(TeamIdentifierPrefix)org.mizt.VC</string>
 	</array>
+	<key>com.apple.security.network.client</key>
+	<true/>
 </dict>
 </plist>
