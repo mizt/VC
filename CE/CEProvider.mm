@@ -149,25 +149,14 @@
                                                (CVPixelBufferGetBytesPerRow(imageBuffer))>>2,
                                                (CVPixelBufferGetBytesPerRow(pixelBuffer))>>2
                                            };
-                                           
-                                           if(width==CVPixelBufferGetWidth(imageBuffer)&&height==CVPixelBufferGetHeight(imageBuffer)) {
-                                               
-                                               unsigned int *image = (unsigned int *)CVPixelBufferGetBaseAddress(imageBuffer);
+                                          
+                                            unsigned int *image = (unsigned int *)CVPixelBufferGetBaseAddress(imageBuffer);
 
-                                               for(int i=0; i<height; i++) {
-                                                   for(int j=0; j<width; j++) {
-                                                       pixel[i*rowBytes[0]+j] = image[i*rowBytes[1]+j];
-                                                   }
-                                               }
-                                           }
-                                           else {
-                                               unsigned int color = 0xFF000000|(random()&0xFFFFFF);
-                                               for(int i=0; i<height; i++) {
-                                                   for(int j=0; j<width; j++) {
-                                                       pixel[i*rowBytes[0]+j] = color;
-                                                   }
-                                               }
-                                           }
+                                            for(int i=0; i<height; i++) {
+                                                for(int j=0; j<width; j++) {
+                                                    pixel[i*rowBytes[0]+j] = image[i*rowBytes[1]+j];
+                                                }
+                                            }
                                        }
                                        CVPixelBufferUnlockBaseAddress(pixelBuffer,0);
 
@@ -206,7 +195,6 @@
                                                bufferPtr[i*rowBytes+j] = 0xFF0000FF;
                                            }
                                        }
-                                       
                                    }
                                    CVPixelBufferUnlockBaseAddress(pixelBuffer,0);
                                    
