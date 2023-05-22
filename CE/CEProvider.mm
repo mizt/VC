@@ -17,12 +17,15 @@
 
 @class CEStreamSource;
 
-#define kFrameRate 30
-#define kLable "timerQueue"
-#define kStream @"SampleCapture.Video"
-#define kModel @"SampleCapture Model"
-#define kDevice @"Sample Capture (Objective-C)"
-#define kManufacturer @"SampleCapture Manufacturer"
+#define WIDTH 640
+#define HEIGHT 480
+#define FPS 30
+
+#define kLable "VC.timerQueue"
+#define kStream @"VC.Video"
+#define kModel @"VC.Model"
+#define kDevice @"VC"
+#define kManufacturer @"VC.Manufacturer"
 
 #pragma mark -
 
@@ -82,7 +85,7 @@
 	self = [super init];
 	if(self) {
         
-        CMVideoDimensions dims = {.width = 640, .height = 480};
+        CMVideoDimensions dims = {.width=WIDTH,.height=HEIGHT};
 
         NSString *name = @"Apple Inc.";                   
         AVCaptureDeviceDiscoverySession *captureDeviceDiscoverySession = [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:@[AVCaptureDeviceTypeBuiltInWideAngleCamera] mediaType:AVMediaTypeVideo position: AVCaptureDevicePositionUnspecified];
@@ -121,59 +124,103 @@
                        objc_registerClassPair(objc_allocateClassPair(objc_getClass("NSObject"),"AVCaptureVideoDataOutputSampleBuffer",0));
                                    Class AVCaptureVideoDataOutputSampleBuffer = objc_getClass("AVCaptureVideoDataOutputSampleBuffer");
 
-                       addMethod(AVCaptureVideoDataOutputSampleBuffer,@"captureOutput:didOutputSampleBuffer:fromConnection:",^(id me,AVCaptureOutput *captureOutput, CMSampleBufferRef sampleBuffer,AVCaptureConnection *connection) {
+                       addMethod(AVCaptureVideoDataOutputSampleBuffer,@"captureOutput:didOutputSampleBuffer:fromConnection:",^(id me,AVCaptureOutput *captureOutput, CMSampleBufferRef sampleBuffer, AVCaptureConnection *connection) {
                            
-                               
+                           bool useSampleBuffer = false;
+                           
                            CVImageBufferRef imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
-                           CVPixelBufferRef pixelBuffer = NULL;
-                           OSStatus err = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, self.bufferPool,(__bridge CFDictionaryRef)self.bufferAuxAttributes,&pixelBuffer);
-                           
-                           if(!err&&imageBuffer&&pixelBuffer) {
-                               
-                               CVPixelBufferLockBaseAddress(pixelBuffer,0);
+                           if(imageBuffer) {
                                CVPixelBufferLockBaseAddress(imageBuffer,0);
-                               {
-                                   unsigned int *pixel = (unsigned int *)CVPixelBufferGetBaseAddress(pixelBuffer);
-                                   size_t width = CVPixelBufferGetWidth(pixelBuffer);
-                                   size_t height = CVPixelBufferGetHeight(pixelBuffer);
-                                                                          
-                                   size_t rowBytes[2] = {
-                                       (CVPixelBufferGetBytesPerRow(imageBuffer))>>2,
-                                       (CVPixelBufferGetBytesPerRow(pixelBuffer))>>2
-                                   };
+                               if(WIDTH==CVPixelBufferGetWidth(imageBuffer)&&HEIGHT==CVPixelBufferGetHeight(imageBuffer)) {
                                    
-                                   if(width==CVPixelBufferGetWidth(imageBuffer)&&height==CVPixelBufferGetHeight(imageBuffer)) {
+                                   useSampleBuffer = true;
+                                   
+                                   CVPixelBufferRef pixelBuffer = nullptr;
+                                   OSStatus err = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, self.bufferPool,(__bridge CFDictionaryRef)self.bufferAuxAttributes,&pixelBuffer);
+                                   if(!err) {
                                        
-                                       unsigned int *image = (unsigned int *)CVPixelBufferGetBaseAddress(imageBuffer);
+                                       CVPixelBufferLockBaseAddress(pixelBuffer,0);
+                                       {
+                                           unsigned int *pixel = (unsigned int *)CVPixelBufferGetBaseAddress(pixelBuffer);
+                                           size_t width = CVPixelBufferGetWidth(pixelBuffer);
+                                           size_t height = CVPixelBufferGetHeight(pixelBuffer);
+                                                                                  
+                                           size_t rowBytes[2] = {
+                                               (CVPixelBufferGetBytesPerRow(imageBuffer))>>2,
+                                               (CVPixelBufferGetBytesPerRow(pixelBuffer))>>2
+                                           };
+                                           
+                                           if(width==CVPixelBufferGetWidth(imageBuffer)&&height==CVPixelBufferGetHeight(imageBuffer)) {
+                                               
+                                               unsigned int *image = (unsigned int *)CVPixelBufferGetBaseAddress(imageBuffer);
 
-                                       for(int i=0; i<height; i++) {
-                                           for(int j=0; j<width; j++) {
-                                               pixel[i*rowBytes[0]+j] = image[i*rowBytes[1]+j];
+                                               for(int i=0; i<height; i++) {
+                                                   for(int j=0; j<width; j++) {
+                                                       pixel[i*rowBytes[0]+j] = image[i*rowBytes[1]+j];
+                                                   }
+                                               }
+                                           }
+                                           else {
+                                               unsigned int color = 0xFF000000|(random()&0xFFFFFF);
+                                               for(int i=0; i<height; i++) {
+                                                   for(int j=0; j<width; j++) {
+                                                       pixel[i*rowBytes[0]+j] = color;
+                                                   }
+                                               }
                                            }
                                        }
-                                   }
-                                   else {
-                                       unsigned int color = 0xFF000000|(random()&0xFFFFFF);
-                                       for(int i=0; i<height; i++) {
-                                           for(int j=0; j<width; j++) {
-                                               pixel[i*rowBytes[0]+j] = color;
-                                           }
+                                       CVPixelBufferUnlockBaseAddress(pixelBuffer,0);
+
+                                       CMSampleBufferRef sbuf = nil;
+                                       CMSampleTimingInfo timing;
+                                       timing.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock());
+                                       timing.decodeTimeStamp = kCMTimeInvalid;
+                                       
+                                       err = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault,pixelBuffer,true,nullptr,nullptr, self.videoDescription,&timing,&sbuf);
+                                       CFRelease(pixelBuffer);
+                                       if(!err) {
+                                           [self->_streamSource.stream sendSampleBuffer:sbuf discontinuity:CMIOExtensionStreamDiscontinuityFlagTime hostTimeInNanoseconds:0];
+                                           CFRelease(sbuf);
                                        }
                                    }
                                }
                                CVPixelBufferUnlockBaseAddress(imageBuffer,0);
-                               CVPixelBufferUnlockBaseAddress(pixelBuffer,0);
-
-                               CMSampleBufferRef sbuf = NULL;
-                               CMSampleTimingInfo timing;
-                               timing.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock());
-                               timing.decodeTimeStamp = kCMTimeInvalid;
+                           }
+                           
+                           if(!useSampleBuffer) {
+                                                                  
+                               CVPixelBufferRef pixelBuffer = nullptr;
+                               OSStatus err = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, self.bufferPool,(__bridge CFDictionaryRef)self.bufferAuxAttributes,&pixelBuffer);
                                
-                               err = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, pixelBuffer, true, NULL, NULL, self.videoDescription, &timing, &sbuf);
-                               CFRelease(pixelBuffer);
-                               if(!err) {
-                                   [self->_streamSource.stream sendSampleBuffer:sbuf discontinuity:CMIOExtensionStreamDiscontinuityFlagTime hostTimeInNanoseconds:0];
-                                   CFRelease(sbuf);
+                               if(!err&&pixelBuffer) {
+                                   
+                                   CVPixelBufferLockBaseAddress(pixelBuffer,0);
+                                   {
+                                       unsigned int *bufferPtr = (unsigned int *)CVPixelBufferGetBaseAddress(pixelBuffer);
+                                       size_t width = CVPixelBufferGetWidth(pixelBuffer);
+                                       size_t height = CVPixelBufferGetHeight(pixelBuffer);
+                                       size_t rowBytes = (CVPixelBufferGetBytesPerRow(pixelBuffer))>>2;
+                                       
+                                       for(int i=0; i<height; i++) {
+                                           for(int j=0; j<width; j++) {
+                                               bufferPtr[i*rowBytes+j] = 0xFF0000FF;
+                                           }
+                                       }
+                                       
+                                   }
+                                   CVPixelBufferUnlockBaseAddress(pixelBuffer,0);
+                                   
+                                   CMSampleBufferRef sbuf = nullptr;
+                                   CMSampleTimingInfo timing;
+                                   timing.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock());
+                                   timing.decodeTimeStamp = kCMTimeInvalid;
+                                   
+                                   err = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault,pixelBuffer,true,nullptr,nullptr, self.videoDescription,&timing,&sbuf);
+                                   CFRelease(pixelBuffer);
+                                   if(!err) {
+                                       [self->_streamSource.stream sendSampleBuffer:sbuf discontinuity:CMIOExtensionStreamDiscontinuityFlagTime hostTimeInNanoseconds:0];
+                                       CFRelease(sbuf);
+                                   }
                                }
                            }
                            
@@ -202,7 +249,7 @@
 		_device = [[CMIOExtensionDevice alloc] initWithLocalizedName:localizedName deviceID:deviceID legacyDeviceID:nil source:self];
         _streamingCounter = 0;
 		_timerQueue = dispatch_queue_create(kLable,0);
-		(void)CMVideoFormatDescriptionCreate(kCFAllocatorDefault, kCVPixelFormatType_32BGRA, dims.width, dims.height, NULL, &_videoDescription);
+		(void)CMVideoFormatDescriptionCreate(kCFAllocatorDefault,kCVPixelFormatType_32BGRA,dims.width,dims.height,NULL,&_videoDescription);
 		if (_videoDescription) {
 			NSDictionary *pixelBufferAttributes = @{
                 (id)kCVPixelBufferWidthKey:@(dims.width),
@@ -216,7 +263,7 @@
         		
 		CMIOExtensionStreamFormat *videoStreamFormat = nil;
 		if(_bufferPool) {
-			videoStreamFormat = [[CMIOExtensionStreamFormat alloc] initWithFormatDescription:_videoDescription maxFrameDuration:CMTimeMake(1,kFrameRate) minFrameDuration:CMTimeMake(1,kFrameRate) validFrameDurations:nil];
+			videoStreamFormat = [[CMIOExtensionStreamFormat alloc] initWithFormatDescription:_videoDescription maxFrameDuration:CMTimeMake(1,FPS) minFrameDuration:CMTimeMake(1,FPS) validFrameDurations:nil];
 			_bufferAuxAttributes = @{(id)kCVPixelBufferPoolAllocationThresholdKey:@(15)};
 		}
 		
@@ -273,44 +320,36 @@
 #ifdef OSC_DEBUG
                 sender->send("/debug","s","start");
 #endif
-                
-                
-                // else {}
-                
+                                
                 _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,_timerQueue);
-                dispatch_source_set_timer(_timer,DISPATCH_TIME_NOW,(uint64_t)(NSEC_PER_SEC/kFrameRate),0);
+                dispatch_source_set_timer(_timer,DISPATCH_TIME_NOW,(uint64_t)(NSEC_PER_SEC/FPS),0);
                 dispatch_source_set_event_handler(_timer,^{
                     dispatch_async(dispatch_get_main_queue(),^{
                         
-                        CVPixelBufferRef pixelBuffer = NULL;
-                        OSStatus err = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, self.bufferPool,(__bridge CFDictionaryRef)self.bufferAuxAttributes,&pixelBuffer);
-                        
+                        CVPixelBufferRef pixelBuffer = nullptr;
+                        OSStatus err = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault,self.bufferPool,(__bridge CFDictionaryRef)self.bufferAuxAttributes,&pixelBuffer);
                         if(!err&&pixelBuffer) {
-                            
                             CVPixelBufferLockBaseAddress(pixelBuffer,0);
                             {
                                 unsigned int *bufferPtr = (unsigned int *)CVPixelBufferGetBaseAddress(pixelBuffer);
                                 size_t width = CVPixelBufferGetWidth(pixelBuffer);
                                 size_t height = CVPixelBufferGetHeight(pixelBuffer);
                                 size_t rowBytes = (CVPixelBufferGetBytesPerRow(pixelBuffer))>>2;
-                                
                                 unsigned int color = 0xFF000000|(random()&0xFFFFFF);
-                                
                                 for(int i=0; i<height; i++) {
                                     for(int j=0; j<width; j++) {
                                         bufferPtr[i*rowBytes+j] = color;
                                     }
                                 }
-                                
                             }
                             CVPixelBufferUnlockBaseAddress(pixelBuffer,0);
                             
-                            CMSampleBufferRef sbuf = NULL;
+                            CMSampleBufferRef sbuf = nullptr;
                             CMSampleTimingInfo timing;
                             timing.presentationTimeStamp = CMClockGetTime(CMClockGetHostTimeClock());
                             timing.decodeTimeStamp = kCMTimeInvalid;
                             
-                            err = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault, pixelBuffer, true, NULL, NULL, self.videoDescription, &timing, &sbuf);
+                            err = CMSampleBufferCreateForImageBuffer(kCFAllocatorDefault,pixelBuffer,true,nullptr,nullptr,self.videoDescription, &timing, &sbuf);
                             CFRelease(pixelBuffer);
                             if(!err) {
                                 [self->_streamSource.stream sendSampleBuffer:sbuf discontinuity:CMIOExtensionStreamDiscontinuityFlagTime hostTimeInNanoseconds:0];
@@ -384,7 +423,7 @@
 		streamProperties.activeFormatIndex = @(self.activeFormatIndex);
 	}
 	if([properties containsObject:CMIOExtensionPropertyStreamFrameDuration]) {
-		CMTime frameDuration = CMTimeMake(1, kFrameRate);
+		CMTime frameDuration = CMTimeMake(1,FPS);
 		NSDictionary *frameDurationDictionary = CFBridgingRelease(CMTimeCopyAsDictionary(frameDuration, NULL));
 		streamProperties.frameDuration = frameDurationDictionary;
 	}
